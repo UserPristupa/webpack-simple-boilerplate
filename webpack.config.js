@@ -11,9 +11,9 @@ const TARGET = process.env.npm_lifecycle_event;
 // Common part
 const common = {
   entry: [
-    './src/scss/style.scss',
-    './src/js/index.js',
-    './src/index.html'
+    './css/style.css',
+    './js/index.js',
+    './index.html'
   ],
   output: {
     path: path.join(__dirname, 'dist'),
