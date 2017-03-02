@@ -11,8 +11,8 @@ const TARGET = process.env.npm_lifecycle_event;
 // Common part
 const common = {
   entry: [
-    './css/style.css',
-    './js/index.js',
+    './style.css',
+    './index.js',
     './index.html'
   ],
   output: {
@@ -41,7 +41,7 @@ if (TARGET === 'start') {
     plugins: [
       new webpack.HotModuleReplacementPlugin(),
       new HtmlWebpackPlugin({
-        template: './src/index.html'
+        template: './index.html'
       })
     ]
   });
@@ -53,7 +53,7 @@ if (TARGET === 'build') {
     plugins: [
       new ExtractTextPlugin('app.css'),
       new HtmlWebpackPlugin({
-        template: './src/index.html'
+        template: './index.html'
       }),
       new webpack.optimize.UglifyJsPlugin({
         compressor: {
