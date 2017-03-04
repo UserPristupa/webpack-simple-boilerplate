@@ -1,10 +1,67 @@
+'use strict';
+
 var express = require('express');
-var app = express();
 var fs = require("fs");
 var bodyParser = require('body-parser');
 var express = require('express');
 var fs = require('fs');
 var router = express.Router();
+
+
+let DBConnectionInstance = null;
+class DB {
+  constructor(dbPath = 'db.json'){
+
+    if(!DBConnectionInstance){
+          DBConnectionInstance = this;
+    }
+
+    let emptyDBFile = false;
+    this.dbPath = dbPath;
+    try{
+      this.DBSize = fs.statSync(dbPath).size;
+    }finally{
+      this.storage = fs.openSync(dbPath, 'a+');
+    }
+
+    if (!this.DBSize){
+      fs.writeSync(this.storage, JSON.stringify({}), 0);
+    }
+
+    return DBConnectionInstance;
+  }
+
+  _getDBData(){
+    this.DBSize = fs.statSync(this.dbPath).size;
+    let buffer = new Buffer(this.DBSize);
+    fs.readSync(this.storage, buffer, 0, this.DBSize, 0);
+    let aux = buffer.toString();
+    return JSON.parse(aux);
+  }
+
+  addRecordForEntity(record, entity){
+    let DBData = this._getDBData();
+    if (DBData[entity] === undefined){
+      DBData[entity] = [];
+    }
+    DBData[entity].push(record);
+
+    const updatedDBData = JSON.stringify(DBData);
+    fs.writeSync(this.storage, updatedDBData, 0);
+
+  }
+
+  getAllRecordsForEntity(entity){
+    let DBData = this._getDBData();
+    if (DBData[entity] !== undefined){
+      const aux = DBData[entity];
+      return aux;
+    }else{
+      return [];
+    }
+  }
+}
+
 
 
 var app = express()
@@ -20,32 +77,66 @@ app.use(function(req, res, next) {
   next();
 });
 
+
+app.use(function(req, res, next) {
+  console.log(req.path, req.body, new Date());
+  next();
+  console.log(res.body);
+});
+
 app.get('/', function (req, res) {
     res.send(allMessages.slice(-10));
 })
 
-app.post('/user/register', function (request, response) {
-    console.log(request.body, new Date());
+const db = new DB("chat_db.json");
 
+function createUserId(s){
+  return s.split("").reduce(function(a,b){a=((a<<5)-a)+b.charCodeAt(0);return a&a},0);   
+}
+
+app.post('/user/register', function (request, response) {
     var user = request.body.username;
 
-    if (allUsers.indexOf(user) == -1){
-      allUsers.push(user);
+    if(!user){
+      response.status(403).send({
+        code: 1,
+        message: "Username value is unvalid",
+        field: "username"
+      })
+      return
+    }
+    const allUsers = db.getAllRecordsForEntity('users');
+
+    let foundUser = findRecordByField('users', 'username', user)
+
+    if (!foundUser.length){
+      const userId = createUserId(user.toLowerCase());
+      console.log(userId);
+      db.addRecordForEntity({user_id: userId, username: user}, 'users')
       response.send({
-        id: user,
+        id: userId,
         username: user
       });
     }else{
       response.status(403).send({
         code: 1,
-        message: "This user is registered already",
+        message: "This user is already registered",
+        field: "username"
       });
     }
 })
 
-app.get('/user', function (request, response) {
-  console.log(request.path, request.body, new Date());
 
+function findRecordByField(entity, field, value){
+  let records = db.getAllRecordsForEntity(entity);
+  return records.filter( (record, index, array) => {
+    if (record[field] == value){
+      return record;
+    }
+  });
+}
+
+app.get('/user', function (request, response) {
   var res = [];
   for(var user of allUsers){
     res.push({user_id: user, username: user, status: "active"})
@@ -53,21 +144,63 @@ app.get('/user', function (request, response) {
   response.send(res);
 })
 
+
+function validateMessage(message){
+  var isValid = true;
+
+  var validationResult = {
+    message: 'Message is not valid',
+    field: ''
+  }
+
+  if (isNaN(Date.parse(message.datetime))){
+    isValid = false
+
+    return {
+      message: 'Datetime is not valid',
+      field: 'datetime'
+    }
+  }
+
+  if (!message.message){
+    isValid = false
+
+    return {
+      message: 'Message is not valid',
+      field: 'message'
+    }
+  }
+
+  let u = findRecordByField('users', 'user_id', message.user_id);
+  if (!u.length){
+    isValid = false
+
+    return {
+      message: 'This user_id is not registered',
+      field: 'user_id'
+    }
+  }
+
+  return isValid;
+}
+
 app.get('/messages', function (request, response) {
-  console.log(request.body, new Date());
 
   var res = [];
-  for(var message of allMessages){
+  for(var message of db.getAllRecordsForEntity('message')){
     res.push(message)
   }
+
   response.send(res);
 })
 
 app.post('/messages', function (request, response) {
-    console.log(request.body, new Date());
+    var result = validateMessage(request.body);
+    if (result === true){
+      db.addRecordForEntity(request.body, 'message');
+    }
 
-    allMessages.push(request.body);
-    response.send(request.body);
+    response.send(result);
 })
 
 
