@@ -10,7 +10,7 @@ var router = express.Router();
 
 let DBConnectionInstance = null;
 class DB {
-  constructor(dbPath = 'db.json'){
+  constructor(dbPath){
 
     if(!DBConnectionInstance){
           DBConnectionInstance = this;
