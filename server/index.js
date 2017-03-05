@@ -47,7 +47,7 @@ class DB {
     DBData[entity].push(record);
 
     const updatedDBData = JSON.stringify(DBData);
-    fs.writeSync(this.storage, updatedDBData, 0);
+    fs.writeFileSync(this.dbPath, updatedDBData);
 
   }
 
@@ -81,7 +81,6 @@ app.use(function(req, res, next) {
 app.use(function(req, res, next) {
   console.log(req.path, req.body, new Date());
   next();
-  console.log(res.body);
 });
 
 app.get('/', function (req, res) {
