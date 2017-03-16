@@ -10,7 +10,7 @@ var router = express.Router();
 
 let DBConnectionInstance = null;
 class DB {
-  constructor(dbPath = 'db.json'){
+  constructor(dbPath){
 
     if(!DBConnectionInstance){
           DBConnectionInstance = this;
@@ -47,7 +47,7 @@ class DB {
     DBData[entity].push(record);
 
     const updatedDBData = JSON.stringify(DBData);
-    fs.writeSync(this.storage, updatedDBData, 0);
+    fs.writeFileSync(this.dbPath, updatedDBData);
 
   }
 
