@@ -81,12 +81,13 @@ app.use(function(req, res, next) {
 app.use(function(req, res, next) {
   console.log(req.path, req.body, new Date());
   next();
-  console.log(res.body);
 });
 
 app.get('/', function (req, res) {
     res.send(allMessages.slice(-10));
 })
+
+const isObjectEmpty = (obj) => Object.keys(obj).length === 0;
 
 const db = new DB("chat_db.json");
 
@@ -112,7 +113,7 @@ app.post('/user/register', function (request, response) {
     if (!foundUser.length){
       const userId = createUserId(user.toLowerCase());
       console.log(userId);
-      db.addRecordForEntity({user_id: userId, username: user}, 'users')
+      db.addRecordForEntity({user_id: userId, username: user, status:'active'}, 'users')
       response.send({
         id: userId,
         username: user
@@ -138,71 +139,207 @@ function findRecordByField(entity, field, value){
 
 app.get('/user', function (request, response) {
   var res = [];
-  for(var user of allUsers){
-    res.push({user_id: user, username: user, status: "active"})
+  for(var user of db.getAllRecordsForEntity('users')){
+    res.push(user)
   }
   response.send(res);
 })
 
 
-function validateMessage(message){
-  var isValid = true;
-
-  var validationResult = {
-    message: 'Message is not valid',
-    field: ''
-  }
-
-  if (isNaN(Date.parse(message.datetime))){
-    isValid = false
-
+function validateDatetime(datetime){
+  if (isNaN(Date.parse(datetime))){
     return {
-      message: 'Datetime is not valid',
+      message: 'Datetime is not valid. Datetime should be like 2001-01-01T01:01:01.001Z',
       field: 'datetime'
     }
+  }else{
+    return false;
   }
+}
 
+function validateMessageText(message){
   if (!message.message){
-    isValid = false
-
     return {
-      message: 'Message is not valid',
+      message: 'Message is not valid. Message should not be empty',
       field: 'message'
     }
+  }else{
+    return false;
   }
+}
 
-  let u = findRecordByField('users', 'user_id', message.user_id);
-  if (!u.length){
-    isValid = false
-
+function validateUser(user_id){
+  let foundUsers = findRecordByField('users', 'user_id', user_id);
+  if (!foundUsers.length){
     return {
       message: 'This user_id is not registered',
       field: 'user_id'
     }
+  }else{
+    return false;
+  }
+}
+
+function validateChatroom(chatroom_id){
+  let messages = findRecordByField('messages', 'chatroomId', chatroom_id);
+  if (!messages.length){
+    return {
+      message: 'This chatroomId does not exist',
+      field: 'chatroom_id'
+    }
+  }else{
+    return false;
+  }
+}
+
+function validateMessage(message){
+  let errors = []
+
+  error = validateDatetime(message.datetime);
+  if (error){
+    errors.push(error);
   }
 
-  return isValid;
+  error = validateChatroom(message.chatroom_id);
+  if (error){
+    errors.push(error);
+  }
+
+  error = validateMessageText(message.message);
+  if (error){
+    errors.push(error);
+  }
+
+  error = validateUser(message.user_id);
+  if (error){
+    errors.push(error);
+  }
+
+  if (errors.length !== 0){
+    return errors;
+  }else{
+    return true;
+  }
+}
+
+function getUsersChatoorms(userId, chatrooms){
+
+  let ownerIn = chatrooms.filter( (item, index, array) => {
+    if (item['owner'] == userId){
+      return true;
+    }else{
+      return false;
+    }
+  })
+
+  let inviteeIn = chatrooms.filter( (item, index, array) => {
+    if (item['invitees'].includes(userId)){
+      return true;
+    }else{
+      return false;
+    }
+  })
+
+  return {
+    ownerIn: ownerIn.map( cr => cr.chatroomId),
+    inviteeIn: inviteeIn.map( cr => cr.chatroomId)
+  }
 }
 
 app.get('/messages', function (request, response) {
 
-  var res = [];
-  for(var message of db.getAllRecordsForEntity('message')){
-    res.push(message)
+  let params = request.query;
+  let messages = db.getAllRecordsForEntity('message');
+
+  console.log(isObjectEmpty(params));
+  if (!isObjectEmpty(params)){
+    let startDtValidationResult = validateDatetime(params.start_datetime);
+    if (startDtValidationResult){
+      response.send(startDtValidationResult);
+    }
+    let endDtValidationResult = validateDatetime(params.end_datetime);
+    if (endDtValidationResult){
+      response.send(endDtValidationResult);
+    }
+
+    messages = messages.filter((message) => { 
+      if (message.datetime >= params.start_datetime && message.datetime <= params.end_datetime){
+        return true;
+      }else{
+        return false;
+      }
+    })
+
+    let chatroomId = 'MAIN';
+    if (params.chatroomId){
+      chatroomId = params.chatroomId
+    }
+
+    messages = messages.filter((message) => { 
+      if (message.chatroomId == chatroomId){
+        return true;
+      }else{
+        return false;
+      }
+    })
   }
 
-  response.send(res);
+  response.send(messages);
 })
 
 app.post('/messages', function (request, response) {
     var result = validateMessage(request.body);
     if (result === true){
       db.addRecordForEntity(request.body, 'message');
+      response.send(result);
+    }else{
+      response.status(403).send(result);
     }
-
-    response.send(result);
 })
 
+app.post('/chatroom', function (request, response) {
+    var params = request.body;
+
+    let owner = params.owner;
+    let invitees = params.invitees;
+
+    let chatroomId = `${owner}#${invitees.join('&')}`;
+
+    console.log(chatroomId);
+
+    let chatroom = findRecordByField('chatroom', 'chatroomId', chatroomId);
+    console.log(chatroom);
+    if(chatroom.length !== 0){
+      response.status(403).send({
+        message: 'This chatroom already exists',
+        field: 'chatroom'
+      });
+    }else{
+      db.addRecordForEntity({owner, invitees, chatroomId}, 'chatroom');
+      response.send(chatroomId);
+    }
+})
+
+app.get('/chatroom', function (request, response) {
+    let params = request.query;
+
+    // let chatroomId = params.chatroom_id;
+    let userId = params.user_id;
+
+    let chatrooms = findRecordByField('chatroom', 'chatroomId', chatroomId);
+    
+    if(chatroom.length === 0){
+      response.status(403).send({
+        message: 'This chatroom does not exist',
+        field: 'chatroom'
+      });
+    }else{
+
+      let usersChatrooms = getUsersChatoorms(userId, chatrooms);
+
+      response.send(usersChatrooms);
+    }
+})
 
 var server = app.listen(8081, function () {
   console.log("App listening on port 8081");
