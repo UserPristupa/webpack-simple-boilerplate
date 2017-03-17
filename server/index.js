@@ -1,12 +1,11 @@
 'use strict';
 
-var express = require('express');
-var fs = require("fs");
-var bodyParser = require('body-parser');
-var express = require('express');
-var fs = require('fs');
-var router = express.Router();
+const express = require('express');
+const fs = require("fs");
+const bodyParser = require('body-parser');
+const router = express.Router();
 
+const DEFAULT_CHATROOM = 'MAIN';
 
 let DBConnectionInstance = null;
 class DB {
@@ -20,6 +19,10 @@ class DB {
     this.dbPath = dbPath;
     try{
       this.DBSize = fs.statSync(dbPath).size;
+    }catch (err){
+      if (err.code === 'ENOENT') {
+        console.log('Database does not exist. Creating the new one...');
+      }
     }finally{
       this.storage = fs.openSync(dbPath, 'a+');
     }
@@ -62,72 +65,6 @@ class DB {
   }
 }
 
-
-
-var app = express()
-
-var allMessages = [];
-var allUsers = [];
-
-app.use(bodyParser.json())
-
-app.use(function(req, res, next) {
-  res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
-  next();
-});
-
-
-app.use(function(req, res, next) {
-  console.log(req.path, req.body, new Date());
-  next();
-});
-
-app.get('/', function (req, res) {
-    res.send(allMessages.slice(-10));
-})
-
-const isObjectEmpty = (obj) => Object.keys(obj).length === 0;
-
-const db = new DB("chat_db.json");
-
-function createUserId(s){
-  return s.split("").reduce(function(a,b){a=((a<<5)-a)+b.charCodeAt(0);return a&a},0);   
-}
-
-app.post('/user/register', function (request, response) {
-    var user = request.body.username;
-
-    if(!user){
-      response.status(403).send({
-        code: 1,
-        message: "Username value is unvalid",
-        field: "username"
-      })
-      return
-    }
-    const allUsers = db.getAllRecordsForEntity('users');
-
-    let foundUser = findRecordByField('users', 'username', user)
-
-    if (!foundUser.length){
-      const userId = createUserId(user.toLowerCase());
-      console.log(userId);
-      db.addRecordForEntity({user_id: userId, username: user, status:'active'}, 'users')
-      response.send({
-        id: userId,
-        username: user
-      });
-    }else{
-      response.status(403).send({
-        code: 1,
-        message: "This user is already registered",
-        field: "username"
-      });
-    }
-})
-
-
 function findRecordByField(entity, field, value){
   let records = db.getAllRecordsForEntity(entity);
   return records.filter( (record, index, array) => {
@@ -137,13 +74,27 @@ function findRecordByField(entity, field, value){
   });
 }
 
-app.get('/user', function (request, response) {
-  var res = [];
-  for(var user of db.getAllRecordsForEntity('users')){
-    res.push(user)
-  }
-  response.send(res);
-})
+function createUserId(username){
+  return Math.abs(username.split("").reduce(function(a,b){a=((a<<5)-a)+b.charCodeAt(0);return a&a},0)); 
+}
+
+const isObjectEmpty = (obj) => Object.keys(obj).length === 0;
+
+
+var app = express()
+
+app.use(bodyParser.json())
+
+app.use(function(req, res, next) {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+  next();
+});
+
+app.use(function(req, res, next) {
+  console.log(req.path, req.body, new Date());
+  next();
+});
 
 
 function validateDatetime(datetime){
@@ -157,8 +108,19 @@ function validateDatetime(datetime){
   }
 }
 
+function validateDatetimeForFuture(datetime){
+  if (Date.parse(datetime) > new Date()){
+    return {
+      message: 'Datetime is not valid. Datetime should not be greated than current moment',
+      field: 'datetime'
+    }
+  }else{
+    return false;
+  }
+}
+
 function validateMessageText(message){
-  if (!message.message){
+  if (!message){
     return {
       message: 'Message is not valid. Message should not be empty',
       field: 'message'
@@ -169,7 +131,7 @@ function validateMessageText(message){
 }
 
 function validateUser(user_id){
-  let foundUsers = findRecordByField('users', 'user_id', user_id);
+  const foundUsers = findRecordByField('user', 'user_id', user_id);
   if (!foundUsers.length){
     return {
       message: 'This user_id is not registered',
@@ -181,11 +143,15 @@ function validateUser(user_id){
 }
 
 function validateChatroom(chatroom_id){
-  let messages = findRecordByField('messages', 'chatroomId', chatroom_id);
-  if (!messages.length){
-    return {
-      message: 'This chatroomId does not exist',
-      field: 'chatroom_id'
+  if (chatroom_id){
+    const messages = findRecordByField('chatroom', 'chatroom_id', chatroom_id);
+    if (messages.length === 0){
+      return {
+        message: 'This chatroom_id does not exist',
+        field: 'chatroom_id'
+      }
+    }else{
+      return false;
     }
   }else{
     return false;
@@ -193,11 +159,19 @@ function validateChatroom(chatroom_id){
 }
 
 function validateMessage(message){
-  let errors = []
+  let errors = [];
+  let error = {};
 
-  error = validateDatetime(message.datetime);
-  if (error){
-    errors.push(error);
+  if (message.datetime){
+    error = validateDatetime(message.datetime);
+    if(!error){
+      error = validateDatetimeForFuture(message.datetime);
+      if (error){
+        errors.push(error);
+      }
+    }else{
+      errors.push(error);
+    }
   }
 
   error = validateChatroom(message.chatroom_id);
@@ -233,7 +207,7 @@ function getUsersChatoorms(userId, chatrooms){
   })
 
   let inviteeIn = chatrooms.filter( (item, index, array) => {
-    if (item['invitees'].includes(userId)){
+    if (item['invitees'].includes(Number(userId))){
       return true;
     }else{
       return false;
@@ -246,13 +220,80 @@ function getUsersChatoorms(userId, chatrooms){
   }
 }
 
+
+const db = new DB("chat_db.json");
+
+
+app.get('/', function (req, res) {
+    res.send(db.getAllRecordsForEntity('message').slice(-10));
+})
+
+
+app.post('/users/register', function (request, response) {
+    const username = request.body.username;
+    const usernameLower = username.toLowerCase();
+
+    if(!username){
+      response.status(403).send({
+        code: 1,
+        message: "Username value is not valid. Username should not be empty",
+        field: "username"
+      })
+      return
+    }
+    const allUsers = db.getAllRecordsForEntity('user');
+
+    const userId = createUserId(usernameLower);
+    const foundUser = findRecordByField('user', 'user_id', userId)
+
+    if (!foundUser.length){
+      db.addRecordForEntity({user_id: userId, username: username, status:'active'}, 'user')
+      response.send({
+        id: userId,
+        username: username
+      });
+    }else{
+      response.status(403).send({
+        code: 1,
+        message: "This user is already registered",
+        field: "username"
+      });
+    }
+})
+
+
+app.get('/users', function (request, response) {
+  var res = [];
+  for(var user of db.getAllRecordsForEntity('user')){
+    res.push(user)
+  }
+  response.send(res);
+})
+
+
+app.post('/messages', function (request, response) {
+    let params = request.body;
+    let validationResult = validateMessage(request.body);
+
+    if (!params.chatroom_id){
+      params.chatroom_id = DEFAULT_CHATROOM;
+    }
+
+    if (validationResult === true){
+      db.addRecordForEntity(params, 'message');
+      response.send(validationResult);
+    }else{
+      response.status(403).send(validationResult);
+    }
+})
+
+
 app.get('/messages', function (request, response) {
 
   let params = request.query;
   let messages = db.getAllRecordsForEntity('message');
 
-  console.log(isObjectEmpty(params));
-  if (!isObjectEmpty(params)){
+  if (params.start_datetime && params.end_datetim){
     let startDtValidationResult = validateDatetime(params.start_datetime);
     if (startDtValidationResult){
       response.send(startDtValidationResult);
@@ -269,45 +310,45 @@ app.get('/messages', function (request, response) {
         return false;
       }
     })
-
-    let chatroomId = 'MAIN';
-    if (params.chatroomId){
-      chatroomId = params.chatroomId
-    }
-
-    messages = messages.filter((message) => { 
-      if (message.chatroomId == chatroomId){
-        return true;
-      }else{
-        return false;
-      }
-    })
   }
+
+  let chatroom_id = DEFAULT_CHATROOM;
+  if (params.chatroom_id){
+    chatroom_id = params.chatroom_id
+  }
+
+  console.log(chatroom_id, 1);
+
+  messages = messages.filter((message) => { 
+    console.log(message.chatroom_id, 2);
+    if (message.chatroom_id == chatroom_id){
+      return true;
+    }else{
+      return false;
+    }
+  })
+  
 
   response.send(messages);
 })
 
-app.post('/messages', function (request, response) {
-    var result = validateMessage(request.body);
-    if (result === true){
-      db.addRecordForEntity(request.body, 'message');
-      response.send(result);
-    }else{
-      response.status(403).send(result);
-    }
-})
 
 app.post('/chatroom', function (request, response) {
     var params = request.body;
 
     let owner = params.owner;
     let invitees = params.invitees;
+    let name = params.name;
 
-    let chatroomId = `${owner}#${invitees.join('&')}`;
+    let chatroom_id = `${owner}-${invitees.join('-')}`;
 
-    console.log(chatroomId);
+    if (!name){
+      name = chatroom_id;
+    }
 
-    let chatroom = findRecordByField('chatroom', 'chatroomId', chatroomId);
+    console.log(chatroom_id);
+
+    let chatroom = findRecordByField('chatroom', 'chatroom_id', chatroom_id);
     console.log(chatroom);
     if(chatroom.length !== 0){
       response.status(403).send({
@@ -315,30 +356,23 @@ app.post('/chatroom', function (request, response) {
         field: 'chatroom'
       });
     }else{
-      db.addRecordForEntity({owner, invitees, chatroomId}, 'chatroom');
-      response.send(chatroomId);
+      db.addRecordForEntity({owner, invitees, chatroom_id, name}, 'chatroom');
+      response.send({chatroom_id: chatroom_id, name});
     }
 })
 
 app.get('/chatroom', function (request, response) {
     let params = request.query;
 
-    // let chatroomId = params.chatroom_id;
     let userId = params.user_id;
 
-    let chatrooms = findRecordByField('chatroom', 'chatroomId', chatroomId);
-    
-    if(chatroom.length === 0){
-      response.status(403).send({
-        message: 'This chatroom does not exist',
-        field: 'chatroom'
-      });
-    }else{
+    let chatrooms = db.getAllRecordsForEntity('chatroom');
+
 
       let usersChatrooms = getUsersChatoorms(userId, chatrooms);
 
       response.send(usersChatrooms);
-    }
+    
 })
 
 var server = app.listen(8081, function () {
